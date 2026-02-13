@@ -1,5 +1,5 @@
 # Smart Bookmark App
- https://kunal112137-bookmark-manager.vercel.app/login
+https://kunal112137-bookmark-manager-c2ws.vercel.app/login
 
 This is a small Next.js (App Router) application that demonstrates Google OAuth sign-in with Supabase, per-user bookmarks, and realtime updates across open tabs.
 
