@@ -30,38 +30,71 @@ export default function BookmarkList() {
   useEffect(() => {
     if (!userId) return
 
-    const channel = supabase
-      .channel(`bookmarks-${userId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'bookmarks',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload: any) => {
-          setBookmarks((prev) => [payload.new, ...prev])
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'bookmarks',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload: any) => {
-          setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
-        }
-      )
-      .subscribe()
+    const channel = supabase.channel(`bookmarks-${userId}`)
+
+    // INSERT
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'bookmarks',
+        filter: `user_id=eq.${userId}`,
+      },
+      (payload: any) => {
+        setBookmarks((prev) => {
+          // If there's an optimistic temp item matching this URL/title, replace it
+          const tempIndex = prev.findIndex((p) => p._optimistic && p.url === payload.new.url && p.title === payload.new.title)
+          if (tempIndex !== -1) {
+            const next = [...prev]
+            next[tempIndex] = payload.new
+            return next
+          }
+
+          // dedupe if item already exists
+          const exists = prev.some((p) => p.id === payload.new.id)
+          if (exists) return prev
+
+          // insert according to current sort order
+          return sortOrder === 'newest' ? [payload.new, ...prev] : [...prev, payload.new]
+        })
+      }
+    )
+
+    // UPDATE
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'bookmarks',
+        filter: `user_id=eq.${userId}`,
+      },
+      (payload: any) => {
+        setBookmarks((prev) => prev.map((b) => (b.id === payload.new.id ? payload.new : b)))
+      }
+    )
+
+    // DELETE
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'bookmarks',
+        filter: `user_id=eq.${userId}`,
+      },
+      (payload: any) => {
+        setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
+      }
+    )
+
+    channel.subscribe()
 
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [userId])
+  }, [userId, sortOrder])
 
   async function fetchBookmarks(uid: string, order: 'newest' | 'oldest') {
     const { data } = await supabase
@@ -112,24 +145,46 @@ export default function BookmarkList() {
       return
     }
 
+    // Optimistic UI: insert a temporary item immediately
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const tempItem = {
+      id: tempId,
+      title: title.trim() || urlToAdd,
+      url: urlToAdd,
+      user_id: userId,
+      created_at: new Date().toISOString(),
+      _optimistic: true,
+    }
+
     setLoading(true)
+    setBookmarks((prev) => (sortOrder === 'newest' ? [tempItem, ...prev] : [...prev, tempItem]))
+    setTitle('')
+    setUrl('')
+
     try {
-      const { error: err } = await supabase.from('bookmarks').insert([
-        {
-          title: title.trim() || urlToAdd,
-          url: urlToAdd,
-          user_id: userId,
-        },
-      ])
+      const { data: inserted, error: err } = await supabase
+        .from('bookmarks')
+        .insert([
+          {
+            title: tempItem.title,
+            url: tempItem.url,
+            user_id: userId,
+          },
+        ])
+        .select()
 
       if (err) {
         setError(err.message)
-      } else {
-        setTitle('')
-        setUrl('')
+        // rollback optimistic insert
+        setBookmarks((prev) => prev.filter((b) => b.id !== tempId))
+      } else if (inserted && inserted.length > 0) {
+        const real = inserted[0]
+        // replace temp with real (match by tempId)
+        setBookmarks((prev) => prev.map((b) => (b.id === tempId ? real : b)))
       }
     } catch (e: any) {
       setError(e.message)
+      setBookmarks((prev) => prev.filter((b) => b.id !== tempId))
     } finally {
       setLoading(false)
     }
@@ -138,10 +193,18 @@ export default function BookmarkList() {
   async function deleteBookmark(id: string) {
     if (!userId) return
     setDeleting(id)
+    // Optimistic delete: remove item immediately, keep a copy to rollback on error
+    const previous = bookmarks
+    setBookmarks((prev) => prev.filter((b) => b.id !== id))
     try {
-      await supabase.from('bookmarks').delete().eq('id', id).eq('user_id', userId)
+      const { error: err } = await supabase.from('bookmarks').delete().eq('id', id).eq('user_id', userId)
+      if (err) {
+        setError(err.message)
+        setBookmarks(previous)
+      }
     } catch (e: any) {
       setError(e.message)
+      setBookmarks(previous)
     } finally {
       setDeleting(null)
     }

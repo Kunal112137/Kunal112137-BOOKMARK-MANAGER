@@ -41,7 +41,8 @@ Open http://localhost:3000 and sign in with Google.
 - The client-side Supabase helper is at `src/lib/supabaseClient.ts`.
 - Auth state is managed in `src/components/AuthProvider.tsx` which listens to `supabase.auth.onAuthStateChange`.
 - The main UI is in `src/components/BookmarkList.tsx`. It loads the current user's bookmarks and subscribes to `INSERT` and `DELETE` events via `supabase.channel(...).on('postgres_changes', ...)` so multiple tabs update in realtime.
-- RLS policies are required so that each user only sees and manages their own rows. The `supabase.sql` file contains the SQL to create the table and policies.
+- RLS policies are required so that each user ongit add .
+ly sees and manages their own rows. The `supabase.sql` file contains the SQL to create the table and policies.
 ## Troubles I ran into and how I solved them
 
 Below are concrete problems I hit while building this app and the steps I took to fix them. These notes include the debugging actions, configuration changes, and small code edits that resolved each issue.
